@@ -211,6 +211,18 @@ def get_movie_trailer(movie_id):
     
     return trailer
 
+def get_similar_movies(movie_id):
+    """Get similar movies recommendations"""
+    response = requests.get(
+        f"{BASE_URL}/movie/{movie_id}/similar",
+        params={"api_key": TMDB_API_KEY, "language": "en-US", "page": 1}
+    )
+    
+    if response.ok:
+        data = response.json()
+        return data.get("results", [])[:5]  # Get exactly 5 similar movies
+    return []
+
 def show_movie_details(movie_id):
     """Display detailed movie information"""
     # Get basic movie details
@@ -345,6 +357,102 @@ def show_movie_details(movie_id):
     else:
         st.write("No streaming information available.")
     
+    # Display similar movies
+    similar_movies = get_similar_movies(movie_id)
+    if similar_movies:
+        st.markdown("### Similar Movies You Might Like")
+        
+        # Add custom CSS for uniform poster sizes and button styling
+        st.markdown("""
+            <style>
+            /* Container for each movie column */
+            .movie-container {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                height: 100%;
+            }
+            
+            /* Poster image wrapper to maintain aspect ratio */
+            .poster-wrapper {
+                width: 100%;
+                aspect-ratio: 2/3;
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .poster-wrapper img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                border-radius: 8px;
+            }
+            
+            /* Button styling */
+            .stButton > button {
+                width: 100%;
+                padding: 10px;
+                background-color: #0d47a1;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                margin-top: 5px;
+            }
+            .stButton > button:hover {
+                background-color: #1565c0;
+            }
+            
+            /* Caption styling */
+            .movie-caption {
+                margin-top: 8px;
+                text-align: center;
+                font-size: 14px;
+                line-height: 1.2;
+                max-width: 100%;
+            }
+            
+            .rating-caption {
+                text-align: center;
+                color: #666;
+                font-size: 12px;
+                margin: 4px 0;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        # Create 5 columns for the movies
+        cols = st.columns(5)
+        
+        # Display each movie in its own column
+        for col, movie in zip(cols, similar_movies):
+            with col:
+                poster_path = movie.get('poster_path')
+                if poster_path:
+                    poster_url = f"{POSTER_BASE_URL}{poster_path}"
+                else:
+                    poster_url = "https://via.placeholder.com/185x278?text=No+Poster"
+                
+                # Create a container div for the movie
+                st.markdown(f"""
+                    <div class="movie-container">
+                        <div class="poster-wrapper">
+                            <img src="{poster_url}" alt="{movie['title']}" onerror="this.src='https://via.placeholder.com/185x278?text=No+Poster'">
+                        </div>
+                        <div class="movie-caption">{movie['title']}</div>
+                        <div class="rating-caption">⭐ {movie['vote_average']:.1f}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Add the button at the bottom
+                if st.button(
+                    "View Details",
+                    key=f"similar_movie_{movie['id']}",
+                    help=f"Click to view details for {movie['title']}"
+                ):
+                    st.session_state.selected_movie = movie['id']
+                    st.session_state.view = 'details'
+                    st.rerun()
+    
     # Back button
     if st.button("← Back to Movies"):
         st.session_state.view = 'main'
@@ -405,6 +513,23 @@ def show_main_view():
         .movie-info {
             padding: 10px 0;
         }
+        .movie-title {
+            font-size: 14px;
+            font-weight: 500;
+            margin: 0;
+            line-height: 1.4;
+            color: #1a1a1a;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+        .movie-rating {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
         .pagination {
             display: flex;
             justify-content: center;
@@ -456,6 +581,7 @@ def show_main_view():
                     color: #666 !important;
                     background: none !important;
                     border: 1px solid #ddd !important;
+                    padding: 2px 15px !important;
                 }
                 div[data-testid="element-container"]:has(#filter_button) button:hover {
                     border-color: #666 !important;
@@ -616,7 +742,11 @@ def show_main_view():
             st.write(f"⭐ {item['vote_average']:.1f}")
             
             # More Info button
-            if st.button("More Info", key=f"{content_type}_{item['id']}", use_container_width=True):
+            if st.button(
+                "More Info",
+                key=f"{content_type}_{item['id']}",
+                use_container_width=True
+            ):
                 st.session_state.view = 'details'
                 st.session_state.selected_movie = item['id']
                 st.rerun()
