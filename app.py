@@ -9,7 +9,7 @@ load_dotenv()
 
 # Configure the app
 st.set_page_config(
-    page_title="Movie Recommender for Ammu",
+    page_title="Movie Recommender",
     page_icon="🎬",
     layout="wide"
 )
@@ -78,7 +78,7 @@ def get_cast_details(movie_id):
                 'character': cast['character'],
                 'profile_path': f"{PROFILE_BASE_URL}{cast['profile_path']}" if cast['profile_path'] else None
             }
-            for cast in data.get('cast', [])[:5]  # Get top 5 cast members
+            for cast in data.get('cast', [])[:10]  # Get top 10 cast members
         ]
     return []
 
@@ -120,6 +120,22 @@ def get_recommendations(genre_id=None, page=1):
     data = response.json()
     return data.get("results", []), data.get("total_pages", 1)
 
+def search_movies(query, page=1):
+    """Search for movies by title"""
+    response = requests.get(
+        f"{BASE_URL}/search/movie",
+        params={
+            "api_key": TMDB_API_KEY,
+            "query": query,
+            "page": page,
+            "language": "en-US"
+        }
+    )
+    if response.ok:
+        data = response.json()
+        return data.get('results', []), data.get('total_pages', 0)
+    return [], 0
+
 def show_movie_details(movie_id):
     """Display detailed movie information"""
     # Get basic movie details
@@ -133,11 +149,11 @@ def show_movie_details(movie_id):
     
     movie = response.json()
     
-    # Create two columns for layout
-    col1, col2 = st.columns([1, 2])
+    # Create two columns for layout with better ratio
+    col1, col2 = st.columns([1, 2], gap="large")
     
     with col1:
-        # Display poster
+        # Display poster with consistent width
         if movie.get('poster_path'):
             st.image(f"{POSTER_BASE_URL}{movie['poster_path']}", use_column_width=True)
         else:
@@ -147,7 +163,7 @@ def show_movie_details(movie_id):
         # Movie title and basic info
         st.title(movie['title'])
         if movie.get('tagline'):
-            st.write(f"*{movie['tagline']}*")
+            st.markdown(f"*{movie['tagline']}*")
         
         # Release date, runtime, and genres
         st.write(f"📅 Release Date: {movie.get('release_date', 'N/A')}")
@@ -156,8 +172,18 @@ def show_movie_details(movie_id):
         genres = ", ".join([genre['name'] for genre in movie.get('genres', [])])
         st.write(f"🎭 Genres: {genres}")
         
+        # Overview
+        st.subheader("📝 Overview")
+        st.write(movie.get('overview', 'No overview available.'))
+        
+        # Additional movie info
+        if movie.get('budget'):
+            st.write(f"💰 Budget: ${movie['budget']:,}")
+        if movie.get('revenue'):
+            st.write(f"💵 Revenue: ${movie['revenue']:,}")
+        
         # Ratings
-        st.subheader("Ratings")
+        st.subheader("⭐ Ratings")
         ratings_col1, ratings_col2, ratings_col3 = st.columns(3)
         
         # TMDb Rating
@@ -178,45 +204,55 @@ def show_movie_details(movie_id):
                         st.metric("IMDb", ratings.get('imdb', 'N/A'))
                     with ratings_col3:
                         st.metric("Rotten Tomatoes", ratings.get('rotten_tomatoes', 'N/A'))
-        
-        # Overview
-        st.subheader("Overview")
-        st.write(movie.get('overview', 'No overview available.'))
     
     # Cast section
-    st.subheader("Top Cast")
+    st.markdown("### 👥 Top Cast")
     cast = get_cast_details(movie_id)
-    cast_cols = st.columns(5)
-    for idx, member in enumerate(cast):
-        with cast_cols[idx]:
+    
+    # First row of cast
+    cast_row1 = st.columns(5)
+    for idx, member in enumerate(cast[:5]):
+        with cast_row1[idx]:
             if member['profile_path']:
                 st.image(member['profile_path'])
             else:
                 st.image("https://via.placeholder.com/185x278?text=No+Photo")
-            st.write(f"**{member['name']}**")
-            st.write(f"*as {member['character']}*")
+            st.markdown(f"**{member['name']}**")
+            st.markdown(f"*as {member['character']}*")
+    
+    # Second row of cast
+    if len(cast) > 5:
+        cast_row2 = st.columns(5)
+        for idx, member in enumerate(cast[5:10]):
+            with cast_row2[idx]:
+                if member['profile_path']:
+                    st.image(member['profile_path'])
+                else:
+                    st.image("https://via.placeholder.com/185x278?text=No+Photo")
+                st.markdown(f"**{member['name']}**")
+                st.markdown(f"*as {member['character']}*")
     
     # Where to watch section
-    st.subheader("Where to Watch")
+    st.markdown("### 🎬 Where to Watch")
     providers = get_watch_providers(movie_id)
     if providers:
         watch_cols = st.columns(3)
         
         with watch_cols[0]:
             if providers['stream']:
-                st.write("**🎬 Stream on:**")
+                st.markdown("**Stream on:**")
                 for provider in providers['stream']:
                     st.write(f"- {provider['provider_name']}")
         
         with watch_cols[1]:
             if providers['rent']:
-                st.write("**💰 Rent on:**")
+                st.markdown("**Rent on:**")
                 for provider in providers['rent']:
                     st.write(f"- {provider['provider_name']}")
         
         with watch_cols[2]:
             if providers['buy']:
-                st.write("**🛒 Buy on:**")
+                st.markdown("**Buy on:**")
                 for provider in providers['buy']:
                     st.write(f"- {provider['provider_name']}")
     else:
@@ -229,18 +265,45 @@ def show_movie_details(movie_id):
 
 def show_main_view():
     """Display the main movie grid view"""
-    st.title("🎬 Movie Recommender")
+    st.title("🎬 Movie Recommender for Ammu")
     st.write("Discover movies based on genres!")
 
-    # Get genres for the filter
-    genres = get_genres()
+    # Add CSS for consistent movie card heights
+    st.markdown("""
+        <style>
+        .movie-card {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        .movie-poster {
+            aspect-ratio: 2/3;
+            width: 100%;
+            object-fit: cover;
+            border-radius: 5px;
+        }
+        .movie-info {
+            padding: 10px 0;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
-    # Create genre filter
-    selected_genre = st.selectbox(
-        "Select a genre",
-        options=[("", "All Genres")] + [(id, name) for id, name in genres.items()],
-        format_func=lambda x: x[1]
-    )
+    # Create two columns for search and genre filter
+    search_col, genre_col = st.columns([2, 1])
+    
+    with search_col:
+        search_query = st.text_input("🔍 Search movies...", key="search_input")
+    
+    with genre_col:
+        # Get genres for the filter
+        genres = get_genres()
+        selected_genre = st.selectbox(
+            "Select a genre",
+            options=[("", "All Genres")] + [(id, name) for id, name in genres.items()],
+            format_func=lambda x: x[1]
+        )
 
     # Get the genre ID from the selection
     genre_id = selected_genre[0] if selected_genre else None
@@ -248,9 +311,17 @@ def show_main_view():
     # Add pagination
     page = st.number_input("Page", min_value=1, value=1)
     
-    # Get movie recommendations
-    movies, total_pages = get_recommendations(genre_id=genre_id, page=page)
+    # Show loading spinner while fetching data
+    with st.spinner("Loading movies..."):
+        if search_query:
+            movies, total_pages = search_movies(search_query, page)
+        else:
+            movies, total_pages = get_recommendations(genre_id=genre_id, page=page)
     
+    if not movies:
+        st.info("No movies found. Try a different search or genre!")
+        return
+        
     st.write(f"Page {page} of {total_pages}")
     
     # Display movies in a grid
@@ -258,21 +329,34 @@ def show_main_view():
     for idx, movie in enumerate(movies):
         with cols[idx % 4]:
             poster_path = movie.get("poster_path")
-            # Make the poster clickable
-            if poster_path:
-                poster = f"{POSTER_BASE_URL}{poster_path}"
-            else:
-                poster = "https://via.placeholder.com/500x750?text=No+Poster"
             
-            # Using a container to make the whole card clickable
-            with st.container():
-                st.image(poster, use_column_width=True)
-                st.write(f"**{movie['title']}**")
-                st.write(f"⭐ {movie['vote_average']:.1f}")
-                if st.button("View Details", key=f"view_{movie['id']}"):
-                    st.session_state.view = 'details'
-                    st.session_state.selected_movie = movie['id']
-                    st.rerun()
+            # Create a container with consistent height
+            st.markdown('<div class="movie-card">', unsafe_allow_html=True)
+            
+            # Display poster
+            if poster_path:
+                st.markdown(
+                    f'<img src="{POSTER_BASE_URL}{poster_path}" class="movie-poster">',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    '<img src="https://via.placeholder.com/500x750?text=No+Poster" class="movie-poster">',
+                    unsafe_allow_html=True
+                )
+            
+            # Movie info section
+            st.markdown('<div class="movie-info">', unsafe_allow_html=True)
+            st.markdown(f"**{movie['title']}**")
+            st.write(f"⭐ {movie['vote_average']:.1f}")
+            
+            # More Info button
+            if st.button("More Info", key=f"movie_{movie['id']}", use_container_width=True):
+                st.session_state.view = 'details'
+                st.session_state.selected_movie = movie['id']
+                st.rerun()
+            
+            st.markdown('</div></div>', unsafe_allow_html=True)
 
 def main():
     if st.session_state.view == 'details':
