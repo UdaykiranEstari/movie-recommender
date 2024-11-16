@@ -57,6 +57,38 @@ def get_recommendations(genre_id=None, page=1):
     data = response.json()
     return data.get("results", []), data.get("total_pages", 1)
 
+def get_movie_details(movie_id):
+    """Get detailed information about a movie including cast and external ratings."""
+    # Get movie details
+    response = requests.get(
+        f"{BASE_URL}/movie/{movie_id}",
+        params={"api_key": TMDB_API_KEY, "language": "en-US"}
+    )
+    if not response.ok:
+        return None
+    
+    movie_details = response.json()
+    
+    # Get credits (cast information)
+    credits_response = requests.get(
+        f"{BASE_URL}/movie/{movie_id}/credits",
+        params={"api_key": TMDB_API_KEY}
+    )
+    if credits_response.ok:
+        credits = credits_response.json()
+        # Get top 5 cast members
+        movie_details['cast'] = credits.get('cast', [])[:5]
+    
+    # Get external IDs (for IMDb)
+    ext_ids_response = requests.get(
+        f"{BASE_URL}/movie/{movie_id}/external_ids",
+        params={"api_key": TMDB_API_KEY}
+    )
+    if ext_ids_response.ok:
+        movie_details['external_ids'] = ext_ids_response.json()
+    
+    return movie_details
+
 def main():
     st.title("🎬 Movie Recommender")
     st.write("Discover movies based on genres!")
@@ -100,8 +132,50 @@ def main():
                     use_column_width=True
                 )
             st.write(f"⭐ {movie['vote_average']:.1f}")
-            with st.expander("Overview"):
-                st.write(movie["overview"])
+            
+            # Create expander for movie details
+            with st.expander("More Info"):
+                # Get detailed movie information
+                movie_details = get_movie_details(movie['id'])
+                if movie_details:
+                    # Display external ratings if available
+                    if 'external_ids' in movie_details and movie_details['external_ids'].get('imdb_id'):
+                        imdb_id = movie_details['external_ids']['imdb_id']
+                        st.write(f"🎬 [IMDb](https://www.imdb.com/title/{imdb_id})")
+                    
+                    # Display release date and runtime
+                    release_date = movie_details.get('release_date', 'N/A')
+                    runtime = movie_details.get('runtime', 0)
+                    st.write(f"📅 Release Date: {release_date}")
+                    if runtime:
+                        st.write(f"⏱️ Runtime: {runtime} minutes")
+                    
+                    # Display genres
+                    movie_genres = [genre['name'] for genre in movie_details.get('genres', [])]
+                    if movie_genres:
+                        st.write("🎭 Genres: " + ", ".join(movie_genres))
+                    
+                    # Display cast
+                    if 'cast' in movie_details and movie_details['cast']:
+                        st.write("👥 Cast:")
+                        cast_text = ", ".join([actor['name'] for actor in movie_details['cast']])
+                        st.write(cast_text)
+                    
+                    # Display overview
+                    st.write("📝 Overview:")
+                    st.write(movie_details.get('overview', 'No overview available.'))
+                    
+                    # Display additional information
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"💰 Budget: ${movie_details.get('budget', 0):,}")
+                    with col2:
+                        st.write(f"💵 Revenue: ${movie_details.get('revenue', 0):,}")
+                    
+                    # Display production companies
+                    companies = [comp['name'] for comp in movie_details.get('production_companies', [])]
+                    if companies:
+                        st.write("🏢 Production: " + ", ".join(companies))
 
 if __name__ == "__main__":
     main()
