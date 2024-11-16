@@ -116,9 +116,10 @@ def get_recommendations(genre_id=None, page=1):
     params = {
         "api_key": TMDB_API_KEY,
         "language": "en-US",
-        "sort_by": "popularity.desc",
+        "sort_by": "primary_release_date.desc",  # Sort by release date, newest first
         "include_adult": False,
-        "page": page
+        "page": page,
+        "vote_count.gte": 100  # Ensure we get movies with sufficient votes
     }
     
     if genre_id:
@@ -138,8 +139,12 @@ def get_tv_shows(genre_id=None, page=1):
         "api_key": TMDB_API_KEY,
         "language": "en-US",
         "page": page,
-        "sort_by": "popularity.desc"
+        "sort_by": "first_air_date.desc",  # Sort by first air date, newest first
+        "vote_average.gte": 0,  # Include all shows with any rating
+        "vote_count.gte": 20,  # Lower threshold for vote count
+        "include_null_first_air_dates": False,  # Exclude shows without air dates
     }
+    
     if genre_id:
         params["with_genres"] = genre_id
     
@@ -150,19 +155,28 @@ def get_tv_shows(genre_id=None, page=1):
     
     if response.ok:
         data = response.json()
-        return data.get("results", []), data.get("total_pages", 1)
+        results = data.get("results", [])
+        # Sort results by first_air_date if available
+        results.sort(
+            key=lambda x: x.get("first_air_date", "0000-00-00"),
+            reverse=True  # Newest first
+        )
+        return results, data.get("total_pages", 1)
     return [], 0
 
 def search_content(query, page=1, content_type='movie'):
     """Search for movies or TV shows"""
+    params = {
+        "api_key": TMDB_API_KEY,
+        "query": query,
+        "page": page,
+        "language": "en-US",
+        "sort_by": "primary_release_date.desc" if content_type == 'movie' else "first_air_date.desc"
+    }
+    
     response = requests.get(
         f"{BASE_URL}/search/{content_type}",
-        params={
-            "api_key": TMDB_API_KEY,
-            "query": query,
-            "page": page,
-            "language": "en-US"
-        }
+        params=params
     )
     if response.ok:
         data = response.json()
@@ -210,6 +224,38 @@ def get_movie_trailer(movie_id):
     
     return trailer
 
+def get_tv_trailer(tv_id):
+    """Get the official trailer for a TV show"""
+    response = requests.get(
+        f"{BASE_URL}/tv/{tv_id}/videos",
+        params={"api_key": TMDB_API_KEY, "language": "en-US"}
+    )
+    
+    if not response.ok:
+        return None
+        
+    videos = response.json().get("results", [])
+    
+    # First try to find the official trailer
+    trailer = next(
+        (video for video in videos 
+         if video["site"] == "YouTube" and 
+         video["type"] == "Trailer" and 
+         "official" in video["name"].lower()),
+        None
+    )
+    
+    # If no official trailer, try any trailer
+    if not trailer:
+        trailer = next(
+            (video for video in videos 
+             if video["site"] == "YouTube" and 
+             video["type"] == "Trailer"),
+            None
+        )
+    
+    return trailer
+
 def get_similar_movies(movie_id):
     """Get similar movies recommendations"""
     response = requests.get(
@@ -222,77 +268,183 @@ def get_similar_movies(movie_id):
         return data.get("results", [])[:5]  # Get exactly 5 similar movies
     return []
 
-def show_movie_details(movie_id):
-    """Display detailed movie information"""
-    # Get basic movie details
+def get_tv_details(tv_id):
+    """Get TV show details including cast and similar shows"""
+    response = requests.get(
+        f"{BASE_URL}/tv/{tv_id}",
+        params={"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "credits,videos,similar"}
+    )
+    if response.ok:
+        return response.json()
+    return None
+
+def get_movie_details(movie_id):
+    """Get movie details"""
     response = requests.get(
         f"{BASE_URL}/movie/{movie_id}",
         params={"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "credits"}
     )
-    if not response.ok:
-        st.error("Failed to fetch movie details")
-        return
+    if response.ok:
+        return response.json()
+    return None
+
+def get_omdb_ratings(title, year=None):
+    """Get OMDB ratings"""
+    params = {
+        "apikey": OMDB_API_KEY,
+        "t": title
+    }
+    if year:
+        params["y"] = year
     
-    movie = response.json()
+    response = requests.get("http://www.omdbapi.com/", params=params)
+    if response.ok:
+        return response.json()
+    return None
+
+def display_ratings(tmdb_rating, imdb_rating=None, rt_rating=None):
+    """Display ratings in a single row with 3 columns"""
+    st.markdown("""
+        <style>
+        .rating-container {
+            display: flex;
+            flex-direction: row;
+            justify-content: flex-start;
+            align-items: center;
+            gap: 20px;
+            margin: 10px 0;
+        }
+        .rating-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            background-color: rgba(128, 128, 128, 0.1);
+        }
+        .rating-source {
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
-    # Create two columns for layout with better ratio
+    # Create columns for ratings
+    col1, col2, col3 = st.columns(3)
+    
+    # TMDb Rating
+    with col1:
+        if tmdb_rating:
+            st.markdown(f"""
+                <div class="rating-item">
+                    <span class="rating-source">TMDb:</span>
+                    <span>{tmdb_rating}/10</span>
+                </div>
+            """, unsafe_allow_html=True)
+    
+    # IMDb Rating
+    with col2:
+        if imdb_rating:
+            st.markdown(f"""
+                <div class="rating-item">
+                    <span class="rating-source">IMDb:</span>
+                    <span>{imdb_rating}</span>
+                </div>
+            """, unsafe_allow_html=True)
+    
+    # Rotten Tomatoes Rating
+    with col3:
+        if rt_rating:
+            st.markdown(f"""
+                <div class="rating-item">
+                    <span class="rating-source">Rotten Tomatoes:</span>
+                    <span>{rt_rating}</span>
+                </div>
+            """, unsafe_allow_html=True)
+
+def show_movie_details(item_id):
+    """Display detailed movie or TV show information"""
+    content_type = 'movie' if st.session_state.filter_content_type == "Movies" else 'tv'
+    
+    # Get content details
+    if content_type == 'movie':
+        response = requests.get(
+            f"{BASE_URL}/movie/{item_id}",
+            params={"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "credits"}
+        )
+        if not response.ok:
+            st.error("Failed to fetch movie details")
+            return
+        item = response.json()
+        title = item['title']
+        release_date = item.get('release_date', 'N/A')
+        duration = f"⏱️ Runtime: {item.get('runtime')} minutes" if item.get('runtime') else None
+    else:
+        item = get_tv_details(item_id)
+        if not item:
+            st.error("Failed to fetch TV show details")
+            return
+        title = item['name']
+        release_date = item.get('first_air_date', 'N/A')
+        duration = f"⏱️ Episodes: {item.get('number_of_episodes')} ({item.get('number_of_seasons')} seasons)" if item.get('number_of_episodes') else None
+    
+    # Create two columns for layout
     col1, col2 = st.columns([1, 2], gap="large")
     
     with col1:
-        # Display poster with consistent width
-        if movie.get('poster_path'):
-            st.image(f"{POSTER_BASE_URL}{movie['poster_path']}", use_column_width=True)
+        # Display poster
+        if item.get('poster_path'):
+            st.image(f"{POSTER_BASE_URL}{item['poster_path']}", use_column_width=True)
         else:
             st.image("https://via.placeholder.com/500x750?text=No+Poster", use_column_width=True)
     
     with col2:
-        # Movie title and basic info
-        st.title(movie['title'])
-        if movie.get('tagline'):
-            st.markdown(f"*{movie['tagline']}*")
+        # Title and basic info
+        st.title(title)
+        if item.get('tagline'):
+            st.markdown(f"*{item['tagline']}*")
         
-        # Release date, runtime, and genres
-        st.write(f"📅 Release Date: {movie.get('release_date', 'N/A')}")
-        if movie.get('runtime'):
-            st.write(f"⏱️ Runtime: {movie['runtime']} minutes")
-        genres = ", ".join([genre['name'] for genre in movie.get('genres', [])])
+        # Release date and duration
+        st.write(f"📅 Release Date: {release_date}")
+        if duration:
+            st.write(duration)
+        
+        # Genres
+        genres = ", ".join([genre['name'] for genre in item.get('genres', [])])
         st.write(f"🎭 Genres: {genres}")
         
         # Overview
         st.subheader("📝 Overview")
-        st.write(movie.get('overview', 'No overview available.'))
-        
-        # Additional movie info
-        if movie.get('budget'):
-            st.write(f"💰 Budget: ${movie['budget']:,}")
-        if movie.get('revenue'):
-            st.write(f"💵 Revenue: ${movie['revenue']:,}")
+        st.write(item.get('overview', 'No overview available.'))
         
         # Ratings
         st.subheader("⭐ Ratings")
-        ratings_col1, ratings_col2, ratings_col3 = st.columns(3)
         
-        # TMDb Rating
-        with ratings_col1:
-            st.metric("TMDb", f"{movie['vote_average']:.1f}/10")
+        # Create three columns for ratings
+        rating_col1, rating_col2, rating_col3 = st.columns(3)
         
-        # Get IMDb and Rotten Tomatoes ratings
-        ext_ids_response = requests.get(
-            f"{BASE_URL}/movie/{movie_id}/external_ids",
-            params={"api_key": TMDB_API_KEY}
-        )
-        if ext_ids_response.ok:
-            imdb_id = ext_ids_response.json().get('imdb_id')
-            if imdb_id:
-                ratings = get_movie_ratings(imdb_id)
-                if ratings:
-                    with ratings_col2:
-                        st.metric("IMDb", ratings.get('imdb', 'N/A'))
-                    with ratings_col3:
-                        st.metric("Rotten Tomatoes", ratings.get('rotten_tomatoes', 'N/A'))
+        with rating_col1:
+            if item.get('vote_average'):
+                st.metric("TMDb", f"{item['vote_average']:.1f}/10")
+        
+        if content_type == 'movie':
+            # Get IMDb and Rotten Tomatoes ratings for movies
+            ext_ids_response = requests.get(
+                f"{BASE_URL}/movie/{item_id}/external_ids",
+                params={"api_key": TMDB_API_KEY}
+            )
+            if ext_ids_response.ok:
+                imdb_id = ext_ids_response.json().get('imdb_id')
+                if imdb_id:
+                    ratings = get_movie_ratings(imdb_id)
+                    if ratings:
+                        with rating_col2:
+                            st.metric("IMDb", ratings.get('imdb', 'N/A'))
+                        with rating_col3:
+                            st.metric("Rotten Tomatoes", ratings.get('rotten_tomatoes', 'N/A'))
     
     # Display trailer if available
-    trailer = get_movie_trailer(movie_id)
+    trailer = get_movie_trailer(item_id) if content_type == 'movie' else get_tv_trailer(item_id)
     if trailer:
         st.markdown("""
             <div style="margin: 40px 0;">
@@ -305,7 +457,7 @@ def show_movie_details(movie_id):
             .video-container {{
                 position: relative;
                 width: 100%;
-                padding-bottom: 56.25%; /* 16:9 Aspect Ratio */
+                padding-bottom: 56.25%;
                 margin-bottom: 20px;
             }}
             .video-container iframe {{
@@ -326,8 +478,8 @@ def show_movie_details(movie_id):
             </div>
         """, unsafe_allow_html=True)
     
-    # Cast section with modern cards
-    if "credits" in movie and movie["credits"].get("cast"):
+    # Cast section
+    if "credits" in item and item["credits"].get("cast"):
         st.markdown("""
             <style>
             .section-header {
@@ -349,7 +501,7 @@ def show_movie_details(movie_id):
         st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
         st.markdown('<h3 class="section-header">👥 Cast</h3>', unsafe_allow_html=True)
         
-        cast = movie["credits"]["cast"][:10]
+        cast = item["credits"]["cast"][:10]
         cast_cols = st.columns(5)
         for i, member in enumerate(cast):
             with cast_cols[i % 5]:
@@ -369,58 +521,89 @@ def show_movie_details(movie_id):
                     </div>
                 """, unsafe_allow_html=True)
     
-    # Similar movies section with modern grid
-    similar_movies = get_similar_movies(movie_id)
-    if similar_movies:
+    # Similar content section
+    similar_items = []
+    if content_type == 'movie':
+        similar_items = get_similar_movies(item_id)
+    elif item.get('similar', {}).get('results'):
+        similar_items = item['similar']['results'][:5]
+    
+    if similar_items:
         st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
-        st.markdown('<h3 class="section-header">🎬 Similar Movies You Might Like</h3>', unsafe_allow_html=True)
+        st.markdown(f'<h3 class="section-header">🎬 Similar {st.session_state.filter_content_type} You Might Like</h3>', unsafe_allow_html=True)
         
         similar_cols = st.columns(5)
-        for i, movie in enumerate(similar_movies[:10]):
+        for i, similar_item in enumerate(similar_items):
             with similar_cols[i % 5]:
-                poster_path = movie.get('poster_path')
+                poster_path = similar_item.get('poster_path')
                 image_url = f"{POSTER_BASE_URL}{poster_path}" if poster_path else "https://via.placeholder.com/300x450?text=No+Poster"
+                title = similar_item.get('title') if content_type == 'movie' else similar_item.get('name')
                 st.markdown(f"""
                     <div class="similar-movie-card">
                         <img src="{image_url}" style="width: 100%; border-radius: 10px; margin-bottom: 0.5rem;">
                         <div style="text-align: center;">
                             <div style="font-weight: 600; font-size: 1rem; color: var(--text-color);">
-                                {movie['title']}
+                                {title}
                             </div>
                         </div>
                     </div>
                 """, unsafe_allow_html=True)
-                if st.button("More Info", key=f"similar_{movie['id']}", use_container_width=True):
-                    st.session_state.selected_movie = movie['id']
+                if st.button("More Info", key=f"similar_{similar_item['id']}", use_container_width=True):
+                    st.session_state.selected_movie = similar_item['id']
                     st.rerun()
     
-    # Get and display streaming information
-    providers = get_watch_providers(movie_id)
-    if providers and providers.get('stream'):
-        st.markdown("""
-            <div style="margin: 40px 0;">
-                <hr style="border: none; height: 1px; background-color: #e0e0e0; margin: 30px 0;">
-                <h3 style="margin-bottom: 20px;">🎬 Where to Watch</h3>
-            </div>
-        """, unsafe_allow_html=True)
-        # Only show streaming providers
-        for provider in providers['stream']:
-            st.write(f"- {provider['provider_name']}")
-    else:
-        st.markdown("""
-            <div style="margin: 40px 0;">
-                <hr style="border: none; height: 1px; background-color: #e0e0e0; margin: 30px 0;">
-            </div>
-        """, unsafe_allow_html=True)
-        st.write("No streaming information available.")
-    
     # Back button
-    if st.button("← Back to Movies"):
+    if st.button(f"← Back to {st.session_state.filter_content_type}"):
         st.session_state.view = 'main'
         st.rerun()
 
+def apply_custom_css():
+    """Apply custom CSS styling"""
+    st.markdown("""
+        <style>
+        /* Remove white outline in dark mode and improve button styling */
+        .stButton>button {
+            border: none !important;
+            box-shadow: none !important;
+            color: inherit !important;
+            background-color: transparent !important;
+        }
+        
+        .stButton>button:hover {
+            background-color: rgba(128, 128, 128, 0.2) !important;
+        }
+        
+        .stButton>button:focus {
+            box-shadow: none !important;
+        }
+        
+        /* Style select boxes to match theme */
+        .stSelectbox [data-baseweb="select"] {
+            box-shadow: none !important;
+        }
+        
+        /* Remove white outline from selectbox in dark mode */
+        .stSelectbox [data-baseweb="select"]:focus {
+            box-shadow: none !important;
+        }
+
+        /* Improve dark mode contrast */
+        [data-testid="stMarkdownContainer"] {
+            color: inherit !important;
+        }
+        
+        /* Improve button text contrast */
+        .stButton>button span {
+            color: inherit !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
 def show_main_view():
     """Display the main view"""
+    # Apply custom CSS first
+    apply_custom_css()
+    
     # Add CSS for styling
     st.markdown("""
         <style>
@@ -693,7 +876,7 @@ def show_main_view():
             
             if st.button("More Info", key=f"{content_type}_{movie['id']}", use_container_width=True):
                 st.session_state.view = 'details'
-                st.session_state.selected_movie = movie['id']
+                st.session_state.selected_id = movie['id']
                 st.rerun()
             
             st.markdown("</div>", unsafe_allow_html=True)
@@ -748,7 +931,7 @@ def show_main_view():
 
 def main():
     if st.session_state.view == 'details':
-        show_movie_details(st.session_state.selected_movie)
+        show_movie_details(st.session_state.selected_id)
     else:
         show_main_view()
 
