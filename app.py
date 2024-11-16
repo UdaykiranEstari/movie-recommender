@@ -9,15 +9,78 @@ load_dotenv()
 
 # Configure the app
 st.set_page_config(
-    page_title="Movie Recommender",
+    page_title="Movie Recommender for Ammu",
     page_icon="🎬",
     layout="wide"
 )
 
+# Initialize session state for view management
+if 'view' not in st.session_state:
+    st.session_state.view = 'main'
+if 'selected_movie' not in st.session_state:
+    st.session_state.selected_movie = None
+
 # TMDb API configuration
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
+OMDB_API_KEY = os.getenv('OMDB_API_KEY')
 BASE_URL = "https://api.themoviedb.org/3"
 POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
+PROFILE_BASE_URL = "https://image.tmdb.org/t/p/w185"
+
+@st.cache_data
+def get_movie_ratings(imdb_id):
+    """Get IMDb and Rotten Tomatoes ratings using OMDB API"""
+    if not OMDB_API_KEY:
+        return None
+    
+    response = requests.get(
+        f"http://www.omdbapi.com/?i={imdb_id}&apikey={OMDB_API_KEY}"
+    )
+    if response.ok:
+        data = response.json()
+        ratings = {}
+        for rating in data.get('Ratings', []):
+            if rating['Source'] == 'Internet Movie Database':
+                ratings['imdb'] = rating['Value']
+            elif rating['Source'] == 'Rotten Tomatoes':
+                ratings['rotten_tomatoes'] = rating['Value']
+        return ratings
+    return None
+
+def get_watch_providers(movie_id):
+    """Get streaming platforms for the movie"""
+    response = requests.get(
+        f"{BASE_URL}/movie/{movie_id}/watch/providers",
+        params={"api_key": TMDB_API_KEY}
+    )
+    if response.ok:
+        data = response.json()
+        # Get US streaming options
+        us_data = data.get('results', {}).get('US', {})
+        return {
+            'stream': us_data.get('flatrate', []),
+            'rent': us_data.get('rent', []),
+            'buy': us_data.get('buy', [])
+        }
+    return None
+
+def get_cast_details(movie_id):
+    """Get cast details with profile images"""
+    response = requests.get(
+        f"{BASE_URL}/movie/{movie_id}/credits",
+        params={"api_key": TMDB_API_KEY}
+    )
+    if response.ok:
+        data = response.json()
+        return [
+            {
+                'name': cast['name'],
+                'character': cast['character'],
+                'profile_path': f"{PROFILE_BASE_URL}{cast['profile_path']}" if cast['profile_path'] else None
+            }
+            for cast in data.get('cast', [])[:5]  # Get top 5 cast members
+        ]
+    return []
 
 # Cache the genres
 @st.cache_data
@@ -52,44 +115,120 @@ def get_recommendations(genre_id=None, page=1):
     response = requests.get(f"{BASE_URL}/discover/movie", params=params)
     if not response.ok:
         st.error(f"Error fetching recommendations: {response.status_code} - {response.text}")
-        return []
+        return [], 0
     
     data = response.json()
     return data.get("results", []), data.get("total_pages", 1)
 
-def get_movie_details(movie_id):
-    """Get detailed information about a movie including cast and external ratings."""
-    # Get movie details
+def show_movie_details(movie_id):
+    """Display detailed movie information"""
+    # Get basic movie details
     response = requests.get(
         f"{BASE_URL}/movie/{movie_id}",
         params={"api_key": TMDB_API_KEY, "language": "en-US"}
     )
     if not response.ok:
-        return None
+        st.error("Failed to fetch movie details")
+        return
     
-    movie_details = response.json()
+    movie = response.json()
     
-    # Get credits (cast information)
-    credits_response = requests.get(
-        f"{BASE_URL}/movie/{movie_id}/credits",
-        params={"api_key": TMDB_API_KEY}
-    )
-    if credits_response.ok:
-        credits = credits_response.json()
-        # Get top 5 cast members
-        movie_details['cast'] = credits.get('cast', [])[:5]
+    # Create two columns for layout
+    col1, col2 = st.columns([1, 2])
     
-    # Get external IDs (for IMDb)
-    ext_ids_response = requests.get(
-        f"{BASE_URL}/movie/{movie_id}/external_ids",
-        params={"api_key": TMDB_API_KEY}
-    )
-    if ext_ids_response.ok:
-        movie_details['external_ids'] = ext_ids_response.json()
+    with col1:
+        # Display poster
+        if movie.get('poster_path'):
+            st.image(f"{POSTER_BASE_URL}{movie['poster_path']}", use_column_width=True)
+        else:
+            st.image("https://via.placeholder.com/500x750?text=No+Poster", use_column_width=True)
     
-    return movie_details
+    with col2:
+        # Movie title and basic info
+        st.title(movie['title'])
+        if movie.get('tagline'):
+            st.write(f"*{movie['tagline']}*")
+        
+        # Release date, runtime, and genres
+        st.write(f"📅 Release Date: {movie.get('release_date', 'N/A')}")
+        if movie.get('runtime'):
+            st.write(f"⏱️ Runtime: {movie['runtime']} minutes")
+        genres = ", ".join([genre['name'] for genre in movie.get('genres', [])])
+        st.write(f"🎭 Genres: {genres}")
+        
+        # Ratings
+        st.subheader("Ratings")
+        ratings_col1, ratings_col2, ratings_col3 = st.columns(3)
+        
+        # TMDb Rating
+        with ratings_col1:
+            st.metric("TMDb", f"{movie['vote_average']:.1f}/10")
+        
+        # Get IMDb and Rotten Tomatoes ratings
+        ext_ids_response = requests.get(
+            f"{BASE_URL}/movie/{movie_id}/external_ids",
+            params={"api_key": TMDB_API_KEY}
+        )
+        if ext_ids_response.ok:
+            imdb_id = ext_ids_response.json().get('imdb_id')
+            if imdb_id:
+                ratings = get_movie_ratings(imdb_id)
+                if ratings:
+                    with ratings_col2:
+                        st.metric("IMDb", ratings.get('imdb', 'N/A'))
+                    with ratings_col3:
+                        st.metric("Rotten Tomatoes", ratings.get('rotten_tomatoes', 'N/A'))
+        
+        # Overview
+        st.subheader("Overview")
+        st.write(movie.get('overview', 'No overview available.'))
+    
+    # Cast section
+    st.subheader("Top Cast")
+    cast = get_cast_details(movie_id)
+    cast_cols = st.columns(5)
+    for idx, member in enumerate(cast):
+        with cast_cols[idx]:
+            if member['profile_path']:
+                st.image(member['profile_path'])
+            else:
+                st.image("https://via.placeholder.com/185x278?text=No+Photo")
+            st.write(f"**{member['name']}**")
+            st.write(f"*as {member['character']}*")
+    
+    # Where to watch section
+    st.subheader("Where to Watch")
+    providers = get_watch_providers(movie_id)
+    if providers:
+        watch_cols = st.columns(3)
+        
+        with watch_cols[0]:
+            if providers['stream']:
+                st.write("**🎬 Stream on:**")
+                for provider in providers['stream']:
+                    st.write(f"- {provider['provider_name']}")
+        
+        with watch_cols[1]:
+            if providers['rent']:
+                st.write("**💰 Rent on:**")
+                for provider in providers['rent']:
+                    st.write(f"- {provider['provider_name']}")
+        
+        with watch_cols[2]:
+            if providers['buy']:
+                st.write("**🛒 Buy on:**")
+                for provider in providers['buy']:
+                    st.write(f"- {provider['provider_name']}")
+    else:
+        st.write("No streaming information available.")
+    
+    # Back button
+    if st.button("← Back to Movies"):
+        st.session_state.view = 'main'
+        st.rerun()
 
-def main():
+def show_main_view():
+    """Display the main movie grid view"""
     st.title("🎬 Movie Recommender")
     st.write("Discover movies based on genres!")
 
@@ -119,63 +258,27 @@ def main():
     for idx, movie in enumerate(movies):
         with cols[idx % 4]:
             poster_path = movie.get("poster_path")
+            # Make the poster clickable
             if poster_path:
-                st.image(
-                    f"{POSTER_BASE_URL}{poster_path}",
-                    caption=movie["title"],
-                    use_column_width=True
-                )
+                poster = f"{POSTER_BASE_URL}{poster_path}"
             else:
-                st.image(
-                    "https://via.placeholder.com/500x750?text=No+Poster",
-                    caption=movie["title"],
-                    use_column_width=True
-                )
-            st.write(f"⭐ {movie['vote_average']:.1f}")
+                poster = "https://via.placeholder.com/500x750?text=No+Poster"
             
-            # Create expander for movie details
-            with st.expander("More Info"):
-                # Get detailed movie information
-                movie_details = get_movie_details(movie['id'])
-                if movie_details:
-                    # Display external ratings if available
-                    if 'external_ids' in movie_details and movie_details['external_ids'].get('imdb_id'):
-                        imdb_id = movie_details['external_ids']['imdb_id']
-                        st.write(f"🎬 [IMDb](https://www.imdb.com/title/{imdb_id})")
-                    
-                    # Display release date and runtime
-                    release_date = movie_details.get('release_date', 'N/A')
-                    runtime = movie_details.get('runtime', 0)
-                    st.write(f"📅 Release Date: {release_date}")
-                    if runtime:
-                        st.write(f"⏱️ Runtime: {runtime} minutes")
-                    
-                    # Display genres
-                    movie_genres = [genre['name'] for genre in movie_details.get('genres', [])]
-                    if movie_genres:
-                        st.write("🎭 Genres: " + ", ".join(movie_genres))
-                    
-                    # Display cast
-                    if 'cast' in movie_details and movie_details['cast']:
-                        st.write("👥 Cast:")
-                        cast_text = ", ".join([actor['name'] for actor in movie_details['cast']])
-                        st.write(cast_text)
-                    
-                    # Display overview
-                    st.write("📝 Overview:")
-                    st.write(movie_details.get('overview', 'No overview available.'))
-                    
-                    # Display additional information
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write(f"💰 Budget: ${movie_details.get('budget', 0):,}")
-                    with col2:
-                        st.write(f"💵 Revenue: ${movie_details.get('revenue', 0):,}")
-                    
-                    # Display production companies
-                    companies = [comp['name'] for comp in movie_details.get('production_companies', [])]
-                    if companies:
-                        st.write("🏢 Production: " + ", ".join(companies))
+            # Using a container to make the whole card clickable
+            with st.container():
+                st.image(poster, use_column_width=True)
+                st.write(f"**{movie['title']}**")
+                st.write(f"⭐ {movie['vote_average']:.1f}")
+                if st.button("View Details", key=f"view_{movie['id']}"):
+                    st.session_state.view = 'details'
+                    st.session_state.selected_movie = movie['id']
+                    st.rerun()
+
+def main():
+    if st.session_state.view == 'details':
+        show_movie_details(st.session_state.selected_movie)
+    else:
+        show_main_view()
 
 if __name__ == "__main__":
     main()
