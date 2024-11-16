@@ -1,11 +1,9 @@
 import streamlit as st
 import requests
-import os
-from dotenv import load_dotenv
-import pandas as pd
+from config import get_api_keys, POSTER_BASE_URL, TMDB_BASE_URL
 
-# Load environment variables
-load_dotenv()
+# Get API keys
+TMDB_API_KEY, OMDB_API_KEY = get_api_keys()
 
 # Configure the app
 st.set_page_config(
@@ -23,10 +21,9 @@ if 'content_type' not in st.session_state:
     st.session_state.content_type = 'Movies'
 
 # TMDb API configuration
-TMDB_API_KEY = os.getenv('TMDB_API_KEY')
-OMDB_API_KEY = os.getenv('OMDB_API_KEY')
-BASE_URL = "https://api.themoviedb.org/3"
-POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500"
+OMDB_API_KEY = OMDB_API_KEY
+BASE_URL = TMDB_BASE_URL
+POSTER_BASE_URL = POSTER_BASE_URL
 PROFILE_BASE_URL = "https://image.tmdb.org/t/p/w185"
 
 @st.cache_data

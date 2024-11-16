@@ -96,6 +96,71 @@ Ever found yourself endlessly scrolling through streaming platforms, unable to d
    streamlit run app.py
    ```
 
+## Deployment
+
+### Option 1: Streamlit Cloud (Recommended)
+
+1. Push your code to a GitHub repository
+2. Visit [Streamlit Cloud](https://streamlit.io/cloud)
+3. Sign in with your GitHub account
+4. Click "New app"
+5. Select your repository, branch, and main file path (`app.py`)
+6. Add your environment variables (API keys):
+   ```
+   TMDB_API_KEY=your_tmdb_api_key
+   OMDB_API_KEY=your_omdb_api_key
+   ```
+7. Click "Deploy!"
+
+Your app will be live at `https://your-app-name.streamlit.app`
+
+### Option 2: Local Server
+
+To run the app on your local network:
+
+```bash
+streamlit run app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Then access the app from other devices on your network using:
+`http://your-computer-ip:8501`
+
+### Option 3: Docker Deployment
+
+1. Create a Dockerfile:
+   ```dockerfile
+   FROM python:3.13-slim
+   
+   WORKDIR /app
+   
+   COPY requirements.txt .
+   RUN pip install -r requirements.txt
+   
+   COPY . .
+   
+   EXPOSE 8501
+   
+   CMD ["streamlit", "run", "app.py", "--server.address", "0.0.0.0"]
+   ```
+
+2. Build and run the Docker container:
+   ```bash
+   docker build -t movie-recommender .
+   docker run -p 8501:8501 -e TMDB_API_KEY=your_key -e OMDB_API_KEY=your_key movie-recommender
+   ```
+
+### Important Security Notes
+
+1. Never commit your API keys to the repository
+2. Use environment variables for sensitive information
+3. If using Docker, ensure your `.dockerignore` includes:
+   ```
+   .env
+   .git
+   __pycache__
+   *.pyc
+   ```
+
 ## Upcoming Improvements (v2)
 
 ### Performance Optimizations
