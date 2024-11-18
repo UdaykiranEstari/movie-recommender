@@ -124,20 +124,30 @@ def get_recommendations(genre_id=None, page=1):
     params = {
         'api_key': TMDB_API_KEY,
         'language': 'en-US',
-        'page': page,
-        'sort_by': 'primary_release_date.desc',  # Sort by release date, newest first
+        'sort_by': st.session_state.filter_sort[0],
         'include_adult': False,
-        'vote_count.gte': 50  # Lower threshold to get more movies
+        'include_video': False,
+        'page': page,
+        'vote_count.gte': 20
     }
     
-    # Add vote average filter if set
-    if hasattr(st.session_state, 'filter_rating') and st.session_state.filter_rating > 0:
-        params['vote_average.gte'] = st.session_state.filter_rating
-        params['vote_count.gte'] = 20  # Lower threshold when using rating filter
-    
-    if genre_id:
+    if genre_id and genre_id != "":
         params['with_genres'] = genre_id
-        
+    
+    # Add rating filter if set
+    if st.session_state.filter_rating > 0:
+        params['vote_average.gte'] = st.session_state.filter_rating
+    
+    # Add year filter if set
+    if hasattr(st.session_state, 'filter_year'):
+        year_range = st.session_state.filter_year
+        params['primary_release_date.gte'] = f"{year_range[0]}-01-01"
+        params['primary_release_date.lte'] = f"{year_range[1]}-12-31"
+    
+    # Add language filter if set
+    if st.session_state.filter_language[0] != "":
+        params['with_original_language'] = st.session_state.filter_language[0]
+    
     response = requests.get(f"{BASE_URL}/discover/movie", params=params)
     if response.ok:
         data = response.json()
@@ -149,20 +159,29 @@ def get_tv_shows(genre_id=None, page=1):
     params = {
         'api_key': TMDB_API_KEY,
         'language': 'en-US',
+        'sort_by': st.session_state.filter_sort[0],
         'page': page,
-        'sort_by': 'first_air_date.desc',  # Sort by first air date, newest first
-        'include_null_first_air_dates': False,  # Exclude shows without air dates
-        'vote_count.gte': 50  # Lower threshold to get more shows
+        'include_adult': False,
+        'vote_count.gte': 20
     }
     
-    # Add vote average filter if set
-    if hasattr(st.session_state, 'filter_rating') and st.session_state.filter_rating > 0:
-        params['vote_average.gte'] = st.session_state.filter_rating
-        params['vote_count.gte'] = 20  # Lower threshold when filtering by rating
-    
-    if genre_id:
+    if genre_id and genre_id != "":
         params['with_genres'] = genre_id
-        
+    
+    # Add rating filter if set
+    if st.session_state.filter_rating > 0:
+        params['vote_average.gte'] = st.session_state.filter_rating
+    
+    # Add year filter if set
+    if hasattr(st.session_state, 'filter_year'):
+        year_range = st.session_state.filter_year
+        params['first_air_date.gte'] = f"{year_range[0]}-01-01"
+        params['first_air_date.lte'] = f"{year_range[1]}-12-31"
+    
+    # Add language filter if set
+    if st.session_state.filter_language[0] != "":
+        params['with_original_language'] = st.session_state.filter_language[0]
+    
     response = requests.get(f"{BASE_URL}/discover/tv", params=params)
     if response.ok:
         data = response.json()
@@ -177,18 +196,25 @@ def search_content(query, page=1, content_type='movie'):
         'query': query,
         'page': page,
         'include_adult': False,
-        'vote_count.gte': 20,  # Add minimum vote count for search results
-        'sort_by': 'primary_release_date.desc' if content_type == 'movie' else 'first_air_date.desc'
+        'sort_by': 'popularity.desc'  # Sort by popularity by default
     }
     
-    # Add vote average filter if set
+    # Only add rating filter if explicitly set by user
     if hasattr(st.session_state, 'filter_rating') and st.session_state.filter_rating > 0:
         params['vote_average.gte'] = st.session_state.filter_rating
+        # Add minimum vote count only when filtering by rating to ensure quality
+        params['vote_count.gte'] = 20
     
     response = requests.get(f"{BASE_URL}/search/{content_type}", params=params)
     if response.ok:
         data = response.json()
-        return data.get('results', []), data.get('total_pages', 0)
+        results = data.get('results', [])
+        # Sort results by relevance (exact title matches first) and then by popularity
+        results.sort(key=lambda x: (
+            not x.get('title', x.get('name', '')).lower().startswith(query.lower()),
+            -x.get('popularity', 0)
+        ))
+        return results, data.get('total_pages', 0)
     return [], 0
 
 def get_movie_trailer(movie_id):
@@ -273,7 +299,7 @@ def get_similar_movies(movie_id):
     
     if response.ok:
         data = response.json()
-        return data.get("results", [])[:5]  # Get exactly 5 similar movies
+        return data.get("results", [])[:10]  # Get more items initially to filter
     return []
 
 def get_tv_details(tv_id):
@@ -403,8 +429,6 @@ def show_movie_details(item_id):
         # Display poster
         if item.get('poster_path'):
             st.image(f"{POSTER_BASE_URL}{item['poster_path']}", use_column_width=True)
-        else:
-            st.image("https://via.placeholder.com/500x750?text=No+Poster", use_column_width=True)
     
     with col2:
         # Title and basic info
@@ -454,12 +478,8 @@ def show_movie_details(item_id):
     # Display trailer if available
     trailer = get_movie_trailer(item_id) if content_type == 'movie' else get_tv_trailer(item_id)
     if trailer:
-        st.markdown("""
-            <div style="margin: 40px 0;">
-                <hr style="border: none; height: 1px; background-color: #e0e0e0; margin: 30px 0;">
-                <h3 style="margin-bottom: 20px;">🎬 Trailer</h3>
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+        st.markdown('<h3 class="section-header">🎬 Official Trailer</h3>', unsafe_allow_html=True)
         st.markdown(f"""
             <style>
             .video-container {{
@@ -488,100 +508,162 @@ def show_movie_details(item_id):
     
     # Cast section
     if "credits" in item and item["credits"].get("cast"):
-        st.markdown("""
-            <style>
-            .section-header {
-                color: var(--text-color);
-                font-size: 1.5rem;
-                font-weight: 600;
-                margin-bottom: 20px;
-            }
-            .section-divider {
-                border: none;
-                height: 1px;
-                background: linear-gradient(to right, transparent, var(--text-color), transparent);
-                opacity: 0.3;
-                margin: 30px 0;
-            }
-            .cast-card {
-                margin-bottom: 25px;
-            }
-            .cast-card img {
-                width: 100%;
-                border-radius: 10px;
-                margin-bottom: 0.5rem;
-            }
-            .cast-name {
-                font-weight: 600;
-                font-size: 1rem;
-                margin-bottom: 0.25rem;
-                color: var(--text-color);
-            }
-            .cast-character {
-                font-size: 0.9rem;
-                opacity: 0.7;
-            }
-            </style>
-        """, unsafe_allow_html=True)
-        
         st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
-        st.markdown('<h3 class="section-header">👥 Cast</h3>', unsafe_allow_html=True)
+        st.markdown('<h3 class="section-header">👥 Main Cast</h3>', unsafe_allow_html=True)
         
-        cast = item["credits"]["cast"][:10]
-        cast_cols = st.columns(5)
-        for i, member in enumerate(cast):
-            with cast_cols[i % 5]:
-                profile_path = member.get("profile_path")
-                image_url = f"{PROFILE_BASE_URL}{profile_path}" if profile_path else "https://via.placeholder.com/300x450?text=No+Image"
-                st.markdown(f"""
-                    <div class="cast-card">
-                        <img src="{image_url}">
-                        <div style="text-align: center;">
-                            <div class="cast-name">
-                                {member['name']}
-                            </div>
-                            <div class="cast-character">
-                                {member['character']}
-                            </div>
+        # Filter cast members with profile photos
+        cast_with_photos = [member for member in item["credits"]["cast"] if member.get("profile_path")]
+        
+        if cast_with_photos:
+            # Display up to 10 cast members with photos
+            cast = cast_with_photos[:10]
+            num_cols = min(5, len(cast))  # Adjust number of columns based on cast size
+            cast_cols = st.columns(num_cols)
+            
+            for i, member in enumerate(cast):
+                with cast_cols[i % num_cols]:
+                    profile_path = member.get("profile_path")
+                    image_url = f"{PROFILE_BASE_URL}{profile_path}"
+                    st.markdown(f"""
+                        <div class="cast-card">
+                            <img src="{image_url}" alt="{member['name']}">
+                            <p class="cast-name">{member['name']}</p>
+                            <p class="cast-character">as {member['character']}</p>
                         </div>
-                    </div>
-                """, unsafe_allow_html=True)
+                        <style>
+                        .cast-card {{
+                            background: rgba(255, 255, 255, 0.05);
+                            border-radius: 10px;
+                            padding: 10px;
+                            margin-bottom: 15px;
+                            transition: transform 0.2s;
+                            text-align: center;
+                        }}
+                        .cast-card:hover {{
+                            transform: translateY(-5px);
+                        }}
+                        .cast-card img {{
+                            width: 100%;
+                            border-radius: 8px;
+                            margin-bottom: 8px;
+                        }}
+                        .cast-name {{
+                            font-weight: 600;
+                            font-size: 0.9rem;
+                            color: var(--text-color);
+                            margin: 5px 0 2px 0;
+                            padding: 0;
+                        }}
+                        .cast-character {{
+                            font-size: 0.8rem;
+                            color: rgba(255, 255, 255, 0.7);
+                            font-style: italic;
+                            margin: 0;
+                            padding: 0;
+                        }}
+                        </style>
+                    """, unsafe_allow_html=True)
+        else:
+            st.info("No cast photos available for this title.")
     
     # Similar content section
     similar_items = []
     if content_type == 'movie':
         similar_items = get_similar_movies(item_id)
     elif item.get('similar', {}).get('results'):
-        similar_items = item['similar']['results'][:5]
+        similar_items = item['similar']['results'][:10]  # Get more items initially to filter
     
-    if similar_items:
+    # Filter similar items to only include those with posters
+    similar_items_with_posters = [item for item in similar_items if item.get('poster_path')]
+    
+    if similar_items_with_posters:
         st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
-        st.markdown(f'<h3 class="section-header">🎬 Similar {st.session_state.filter_content_type} You Might Like</h3>', unsafe_allow_html=True)
+        st.markdown(f'<h3 class="section-header">🎬 More Like This</h3>', unsafe_allow_html=True)
         
         similar_cols = st.columns(5)
-        for i, similar_item in enumerate(similar_items):
+        # Display only the first 5 items with posters
+        for i, similar_item in enumerate(similar_items_with_posters[:5]):
             with similar_cols[i % 5]:
-                poster_path = similar_item.get('poster_path')
-                image_url = f"{POSTER_BASE_URL}{poster_path}" if poster_path else "https://via.placeholder.com/300x450?text=No+Poster"
-                title = similar_item.get('title') if content_type == 'movie' else similar_item.get('name')
+                poster_path = similar_item['poster_path']
+                image_url = f"{POSTER_BASE_URL}{poster_path}"
+                title = similar_item.get('title', '') if content_type == 'movie' else similar_item.get('name', '')
                 st.markdown(f"""
-                    <div class="similar-movie-card">
-                        <img src="{image_url}" style="width: 100%; border-radius: 10px; margin-bottom: 0.5rem;">
-                        <div style="text-align: center;">
-                            <div style="font-weight: 600; font-size: 1rem; color: var(--text-color);">
-                                {title}
+                    <div class="movie-card">
+                        <div class="poster-container">
+                            <img src="{image_url}" class="poster-image">
+                            <div class="movie-rating">⭐ {similar_item.get('vote_average', 0):.1f}</div>
+                            <div class="movie-info-overlay">
+                                <div class="movie-title">{title}</div>
+                                <div class="movie-year">{similar_item.get('release_date', '')[:4] if similar_item.get('release_date') else 'N/A'}</div>
                             </div>
                         </div>
                     </div>
+                    <style>
+                    .movie-card {{
+                        margin-bottom: 20px;
+                        transition: transform 0.2s;
+                        height: 100%;
+                        display: flex;
+                        flex-direction: column;
+                    }}
+                    .movie-card:hover {{
+                        transform: scale(1.02);
+                    }}
+                    .poster-container {{
+                        position: relative;
+                        width: 100%;
+                        padding-top: 150%; /* 2:3 aspect ratio */
+                        overflow: hidden;
+                        border-radius: 10px;
+                    }}
+                    .poster-image {{
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        width: 100%;
+                        height: 100%;
+                        object-fit: cover;
+                    }}
+                    .movie-rating {{
+                        position: absolute;
+                        top: 10px;
+                        right: 10px;
+                        background: rgba(0, 0, 0, 0.6);
+                        color: #fff;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                        font-size: 0.9em;
+                        backdrop-filter: blur(4px);
+                        -webkit-backdrop-filter: blur(4px);
+                    }}
+                    .movie-info-overlay {{
+                        position: absolute;
+                        bottom: 0;
+                        left: 0;
+                        right: 0;
+                        padding: 15px;
+                        background: linear-gradient(to bottom, transparent, rgba(0,0,0,0.8));
+                        color: white;
+                    }}
+                    .movie-title {{
+                        font-weight: 600;
+                        font-size: 1rem;
+                        margin-bottom: 5px;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }}
+                    .movie-year {{
+                        font-size: 0.9rem;
+                        opacity: 0.9;
+                    }}
+                    </style>
                 """, unsafe_allow_html=True)
+                
                 if st.button("More Info", key=f"similar_{similar_item['id']}", use_container_width=True):
                     st.session_state.selected_movie = similar_item['id']
+                    st.session_state.view = 'details'
                     st.rerun()
-    
-    # Back button
-    if st.button(f"← Back to {st.session_state.filter_content_type}"):
-        st.session_state.view = 'main'
-        st.rerun()
 
 def display_content_grid(movies, content_type):
     """Display a grid of movie or TV show posters"""
@@ -589,345 +671,132 @@ def display_content_grid(movies, content_type):
         st.info("No content found matching your filters. Try adjusting your criteria.")
         return
 
-    st.markdown("""
-        <style>
-        .movie-card-container {
-            position: relative;
-            margin-bottom: 30px;
-            display: block;
-        }
-
-        .movie-card {
-            position: relative;
-            border-radius: 10px;
-            overflow: hidden;
-            background: transparent;
-            cursor: pointer;
-            margin-bottom: 8px;
-        }
-
-        .poster-container {
-            position: relative;
-            width: 100%;
-            padding-top: 150%; /* 2:3 aspect ratio */
-            overflow: hidden;
-        }
-
-        .poster-container img {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            border-radius: 10px;
-            transition: transform 0.3s ease;
-        }
-
-        .movie-card:hover img {
-            transform: scale(1.05);
-        }
-
-        .movie-rating {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: rgba(0, 0, 0, 0.6);
-            color: #fff;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.9em;
-            z-index: 2;
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
-        }
-
-        .movie-info-overlay {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            padding: 20px 15px;
-            background: linear-gradient(
-                to bottom,
-                transparent,
-                rgba(0, 0, 0, 0.3) 20%,
-                rgba(0, 0, 0, 0.65)
-            );
-            color: white;
-            opacity: 1;
-            transition: all 0.3s ease;
-            backdrop-filter: blur(3px);
-            -webkit-backdrop-filter: blur(3px);
-        }
-
-        .movie-card:hover .movie-info-overlay {
-            background: linear-gradient(
-                to bottom,
-                transparent,
-                rgba(0, 0, 0, 0.4) 20%,
-                rgba(0, 0, 0, 0.75)
-            );
-            backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
-        }
-
-        .movie-title {
-            font-weight: 600;
-            margin-bottom: 6px;
-            font-size: 1em;
-            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
-            letter-spacing: 0.2px;
-            line-height: 1.4;
-        }
-
-        .movie-year {
-            font-size: 0.9em;
-            opacity: 0.95;
-            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
-            font-weight: 500;
-        }
-
-        /* Button styling */
-        .stButton > button {
-            width: 100% !important;
-            background: transparent !important;
-            border: 1px solid rgba(128, 128, 128, 0.2) !important;
-            box-shadow: none !important;
-            color: inherit !important;
-            padding: 0.5rem !important;
-            margin: 0 !important;
-            height: auto !important;
-            border-radius: 5px !important;
-        }
-
-        .stButton > button:hover {
-            background: rgba(128, 128, 128, 0.2) !important;
-            border-color: rgba(128, 128, 128, 0.3) !important;
-        }
-
-        .stButton > button:focus {
-            box-shadow: none !important;
-        }
-
-        /* Ensure proper spacing between rows */
-        .row-widget.stVerticalBlock {
-            margin-bottom: 0;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # Filter out movies without posters
+    movies_with_posters = [movie for movie in movies if movie.get('poster_path')]
     
+    if not movies_with_posters:
+        st.info("No content with posters found matching your filters. Try adjusting your criteria.")
+        return
+    
+    # Create columns for the grid
     cols = st.columns(5)
-    for i, movie in enumerate(movies):
-        with cols[i % 5]:
-            # Get release year
-            release_date = movie.get('release_date' if content_type == 'movie' else 'first_air_date', '')
+    
+    # Display movies in a grid
+    for idx, movie in enumerate(movies_with_posters):
+        with cols[idx % 5]:
+            poster_path = movie['poster_path']
+            title = movie.get('title', '') if content_type == 'movie' else movie.get('name', '')
+            release_date = movie.get('release_date', '') if content_type == 'movie' else movie.get('first_air_date', '')
             year = release_date[:4] if release_date else 'N/A'
-            
-            # Get title
-            title = movie.get('title' if content_type == 'movie' else 'name', 'Unknown Title')
-            
-            # Get rating
             rating = movie.get('vote_average', 0)
             
-            # Create a container for the movie card and button
-            st.markdown('<div class="movie-card-container">', unsafe_allow_html=True)
-            
-            # Display unified movie card
-            st.markdown(f"""
-                <div class="movie-card">
-                    <div class="poster-container">
-                        <img src="{POSTER_BASE_URL}{movie['poster_path'] if movie.get('poster_path') else '/placeholder.jpg'}">
-                        <div class="movie-rating">⭐ {rating:.1f}</div>
-                        <div class="movie-info-overlay">
-                            <div class="movie-title">{title}</div>
-                            <div class="movie-year">{year}</div>
+            # Create a clickable container
+            container = st.container()
+            with container:
+                st.markdown(f"""
+                    <div class="movie-card">
+                        <div class="poster-container">
+                            <img src="{POSTER_BASE_URL}{poster_path}" alt="{title}" class="poster-image">
+                        </div>
+                        <div class="movie-info">
+                            <h3>{title}</h3>
+                            <div class="movie-details">
+                                <span>{year}</span>
+                                <span>⭐ {rating:.1f}</span>
+                            </div>
                         </div>
                     </div>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            # More Info button
-            if st.button("More Info", key=f"{content_type}_{movie['id']}", help="Click for more details", use_container_width=True):
-                st.session_state.view = 'details'
-                st.session_state.selected_movie = movie['id']
-                st.rerun()
-            
-            # Close the container
-            st.markdown('</div>', unsafe_allow_html=True)
-
-def apply_custom_css():
-    """Apply custom CSS styling"""
-    st.markdown("""
-        <style>
-        /* Remove white outline in dark mode and improve button styling */
-        .stButton>button {
-            border: none !important;
-            box-shadow: none !important;
-            color: inherit !important;
-            background-color: transparent !important;
-        }
-        
-        .stButton>button:hover {
-            background-color: rgba(128, 128, 128, 0.2) !important;
-        }
-        
-        .stButton>button:focus {
-            box-shadow: none !important;
-        }
-        
-        /* Style select boxes to match theme */
-        .stSelectbox [data-baseweb="select"] {
-            box-shadow: none !important;
-        }
-        
-        /* Remove white outline from selectbox in dark mode */
-        .stSelectbox [data-baseweb="select"]:focus {
-            box-shadow: none !important;
-        }
-
-        /* Improve dark mode contrast */
-        [data-testid="stMarkdownContainer"] {
-            color: inherit !important;
-        }
-        
-        /* Improve button text contrast */
-        .stButton>button span {
-            color: inherit !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+                    <style>
+                    .movie-card {{
+                        margin-bottom: 20px;
+                        transition: transform 0.2s;
+                        height: 100%;
+                        display: flex;
+                        flex-direction: column;
+                    }}
+                    .movie-card:hover {{
+                        transform: scale(1.02);
+                    }}
+                    .poster-container {{
+                        position: relative;
+                        width: 100%;
+                        padding-top: 150%; /* 2:3 aspect ratio */
+                        overflow: hidden;
+                        border-radius: 10px;
+                    }}
+                    .poster-image {{
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        width: 100%;
+                        height: 100%;
+                        object-fit: cover;
+                    }}
+                    .movie-info {{
+                        padding: 10px 5px;
+                        flex-grow: 1;
+                        display: flex;
+                        flex-direction: column;
+                    }}
+                    .movie-info h3 {{
+                        margin: 0;
+                        font-size: 1rem;
+                        font-weight: 600;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }}
+                    .movie-details {{
+                        display: flex;
+                        justify-content: space-between;
+                        margin-top: 5px;
+                        color: var(--text-color);
+                        font-size: 0.9rem;
+                    }}
+                    </style>
+                """, unsafe_allow_html=True)
+                
+                # Make the entire card clickable
+                if st.button("More Info", key=f"movie_{movie['id']}", use_container_width=True):
+                    st.session_state.selected_movie = movie['id']
+                    st.session_state.view = 'details'  # Add this line to set the view to details
+                    st.rerun()
 
 def show_main_view():
     """Display the main view"""
-    # Apply custom CSS first
-    apply_custom_css()
-    
-    # Add CSS for styling
-    st.markdown("""
-        <style>
-        /* Poster styling */
-        .poster-wrapper {
-            width: 100%;
-            aspect-ratio: 2/3;
-            position: relative;
-            overflow: hidden;
-            margin-bottom: 10px;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-        .poster-wrapper img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            border-radius: 8px;
-            transition: transform 0.3s ease;
-        }
-        .poster-wrapper:hover img {
-            transform: scale(1.05);
-        }
-        
-        /* Title styling */
-        .movie-info {
-            padding: 10px 0;
-            height: 60px;
-            overflow: hidden;
-            text-align: center;
-        }
-        .movie-title {
-            font-size: 16px;
-            font-weight: 600;
-            margin: 0;
-            line-height: 1.4;
-            color: var(--text-color, inherit);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-        }
-        
-        /* Button styling */
-        .button-container {
-            width: 100%;
-            position: absolute;
-            bottom: 10px;
-            left: 0;
-            padding: 0 10px;
-        }
-        .stButton > button {
-            width: 100%;
-            padding: 10px;
-            background-color: #0d47a1;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 500;
-            text-transform: uppercase;
-            font-size: 14px;
-            letter-spacing: 0.5px;
-            transition: all 0.2s ease;
-        }
-        .stButton > button:hover {
-            background-color: #1565c0;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(13, 71, 161, 0.2);
-        }
-        
-        /* Movie card button specific styling */
-        .movie-card .stButton > button {
-            border-radius: 0 0 10px 10px !important;
-            margin: 0 !important;
-        }
-        
-        /* Main title */
-        .main-title {
-            text-align: center;
-            font-size: 4rem;
-            font-weight: 700;
-            color: var(--text-color, inherit);
-            margin: 2rem 0;
-            padding: 0;
-            letter-spacing: -1px;
-        }
-        
-        /* Search and filter styling */
-        div[data-testid="stTextInput"] {
-            margin-top: -1px;
-        }
-        .stTextInput > div > div > input {
-            padding: 0.5rem 0.75rem !important;
-            height: 36px !important;
-            max-height: 36px !important;
-            margin-top: 0 !important;
-            margin-bottom: 0 !important;
-        }
-        
-        div[data-testid="stButton"] {
-            margin-top: -1px;
-        }
-        div[data-testid="stButton"] button {
-            padding: 0.5rem 0.75rem !important;
-            height: 36px !important;
-            max-height: 36px !important;
-            margin-top: 0 !important;
-            margin-bottom: 0 !important;
-            color: #666 !important;
-            background: none !important;
-            border: 1px solid #ddd !important;
-            transition: all 0.2s ease !important;
-        }
-        div[data-testid="stButton"] button:hover {
-            border-color: #666 !important;
-            color: #333 !important;
-        }
-        .stButton {
-            margin: 0 !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
     st.markdown('<h1 class="main-title">🎬 Movie Recommender</h1>', unsafe_allow_html=True)
+
+    # Initialize session state variables if they don't exist
+    if 'filter_content_type' not in st.session_state:
+        st.session_state.filter_content_type = "Movies"
+    if 'filter_genre' not in st.session_state:
+        st.session_state.filter_genre = ("", "All Genres")
+    if 'filter_year' not in st.session_state:
+        st.session_state.filter_year = (2000, 2024)
+    if 'filter_rating' not in st.session_state:
+        st.session_state.filter_rating = 0.0
+    if 'filter_language' not in st.session_state:
+        st.session_state.filter_language = ("", "All Languages")
+    if 'filter_sort' not in st.session_state:
+        st.session_state.filter_sort = ("popularity.desc", "Most Popular")
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 1
+    if 'show_filter_ui' not in st.session_state:
+        st.session_state.show_filter_ui = False
+        
+    # Initialize temporary filter state
+    if 'temp_content_type' not in st.session_state:
+        st.session_state.temp_content_type = st.session_state.filter_content_type
+    if 'temp_genre' not in st.session_state:
+        st.session_state.temp_genre = st.session_state.filter_genre
+    if 'temp_year' not in st.session_state:
+        st.session_state.temp_year = st.session_state.filter_year
+    if 'temp_rating' not in st.session_state:
+        st.session_state.temp_rating = st.session_state.filter_rating
+    if 'temp_language' not in st.session_state:
+        st.session_state.temp_language = st.session_state.filter_language
+    if 'temp_sort' not in st.session_state:
+        st.session_state.temp_sort = st.session_state.filter_sort
 
     # Search and filter section
     col1, col2 = st.columns([6, 1])
@@ -941,144 +810,131 @@ def show_main_view():
         )
     
     with col2:
-        show_filters = st.button("⚯ Filters", use_container_width=True, key="filter_button")
+        show_filters = st.button("⚯ Filters", use_container_width=True)
     
-    # Initialize filter states in session state if not exists
-    if 'view' not in st.session_state:
-        st.session_state.view = 'search'
-    if 'selected_movie' not in st.session_state:
-        st.session_state.selected_movie = None
-    if 'filter_content_type' not in st.session_state:
-        st.session_state.filter_content_type = "Movies"
-    if 'filter_genre' not in st.session_state:
-        st.session_state.filter_genre = ""
-    if 'filter_year' not in st.session_state:
-        st.session_state.filter_year = (2000, 2024)
-    if 'filter_language' not in st.session_state:
-        st.session_state.filter_language = ""
-    if 'filter_rating' not in st.session_state:
-        st.session_state.filter_rating = 0.0
-    if 'temp_rating' not in st.session_state:
-        st.session_state.temp_rating = 0.0
-    if 'show_filter_ui' not in st.session_state:
-        st.session_state.show_filter_ui = False
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = 1
-
     # Toggle filter UI visibility
     if show_filters:
         st.session_state.show_filter_ui = not st.session_state.show_filter_ui
 
     # Show filters if button is clicked
     if st.session_state.show_filter_ui:
-        with st.container():
-            st.markdown("""
-                <style>
-                .filter-label {
-                    font-size: 1.2rem;
-                    font-weight: 600;
-                    margin-bottom: 0.5rem;
-                    color: var(--text-color);
-                }
-                </style>
-            """, unsafe_allow_html=True)
-            
-            # Content Type Selection
-            st.markdown('<p class="filter-label">Content Type</p>', unsafe_allow_html=True)
-            st.radio(
+        # Add CSS for filter titles
+        st.markdown("""
+            <style>
+            .filter-title {
+                font-weight: 600;
+                margin-bottom: 5px;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('<p class="filter-title">Content Type</p>', unsafe_allow_html=True)
+        content_type = st.radio(
+            label="",
+            options=["Movies", "TV Shows"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="temp_content_type"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            # Genre Selection
+            st.markdown('<p class="filter-title">Genre</p>', unsafe_allow_html=True)
+            genres = get_genres() if st.session_state.temp_content_type == "Movies" else get_tv_genres()
+            genre = st.selectbox(
                 label="",
-                options=["Movies", "TV Shows"],
-                horizontal=True,
-                key="temp_content_type",
-                index=0 if st.session_state.filter_content_type == "Movies" else 1,
+                options=[("", "All Genres")] + [(str(id), name) for id, name in genres.items()],
+                format_func=lambda x: x[1],
+                key="temp_genre",
                 label_visibility="collapsed"
             )
             
-            filter_col1, filter_col2 = st.columns(2)
+            # Year filter
+            st.markdown('<p class="filter-title">Year Range</p>', unsafe_allow_html=True)
+            year_range = st.slider(
+                label="",
+                min_value=1900,
+                max_value=2024,
+                value=st.session_state.temp_year,
+                key="temp_year",
+                label_visibility="collapsed"
+            )
             
-            with filter_col1:
-                # Get appropriate genres based on content type
-                content_type = 'movie' if st.session_state.temp_content_type == "Movies" else 'tv'
-                genres = get_genres() if content_type == 'movie' else get_tv_genres()
-                
-                # Genre Selection
-                st.markdown('<p class="filter-label">Genre</p>', unsafe_allow_html=True)
-                st.selectbox(
-                    label="",
-                    options=[("", "All Genres")] + [(id, name) for id, name in genres.items()],
-                    format_func=lambda x: x[1],
-                    key="temp_genre",
-                    label_visibility="collapsed"
-                )
-                
-                # Year filter
-                st.markdown('<p class="filter-label">Year</p>', unsafe_allow_html=True)
-                st.slider(
-                    label="",
-                    min_value=1900,
-                    max_value=2024,
-                    value=st.session_state.filter_year,
-                    step=1,
-                    key="temp_year",
-                    label_visibility="collapsed"
-                )
-                
-            with filter_col2:
-                # Language filter
-                st.markdown('<p class="filter-label">Language</p>', unsafe_allow_html=True)
-                languages = {
-                    "": "All Languages",
-                    "en": "English",
-                    "es": "Spanish",
-                    "fr": "French",
-                    "de": "German",
-                    "hi": "Hindi",
-                    "ja": "Japanese",
-                    "ko": "Korean",
-                    "zh": "Chinese"
-                }
-                st.selectbox(
-                    label="",
-                    options=list(languages.items()),
-                    format_func=lambda x: x[1],
-                    key="temp_language",
-                    label_visibility="collapsed"
-                )
-                
-                # Rating filter
-                st.markdown('<p class="filter-label">Minimum Rating</p>', unsafe_allow_html=True)
-                st.slider(
-                    label="",
-                    min_value=0.0,
-                    max_value=10.0,
-                    value=st.session_state.filter_rating,
-                    step=0.5,
-                    key="temp_rating",
-                    label_visibility="collapsed"
-                )
+            # Rating filter
+            st.markdown('<p class="filter-title">Minimum Rating</p>', unsafe_allow_html=True)
+            rating = st.slider(
+                label="",
+                min_value=0.0,
+                max_value=10.0,
+                value=st.session_state.temp_rating,
+                step=0.5,
+                key="temp_rating",
+                label_visibility="collapsed"
+            )
+        
+        with col2:
+            # Language filter
+            st.markdown('<p class="filter-title">Language</p>', unsafe_allow_html=True)
+            languages = {
+                "": "All Languages",
+                "en": "English",
+                "hi": "Hindi",
+                "ja": "Japanese",
+                "ko": "Korean",
+                "fr": "French",
+                "es": "Spanish",
+                "de": "German",
+                "it": "Italian",
+                "zh": "Chinese"
+            }
+            language = st.selectbox(
+                label="",
+                options=list(languages.items()),
+                format_func=lambda x: x[1],
+                key="temp_language",
+                label_visibility="collapsed"
+            )
             
-            # Filter Buttons
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Reset Filters", use_container_width=True):
-                    # Only reset the permanent states
-                    st.session_state.filter_rating = 0.0
-                    st.session_state.filter_content_type = "Movies"
-                    st.session_state.filter_genre = ""
-                    st.session_state.filter_year = (2000, 2024)
-                    st.session_state.filter_language = ""
-                    st.session_state.current_page = 1
-                    st.session_state.show_filter_ui = False
-                    st.rerun()
-            with col2:
-                if st.button("Apply Filters", type="primary", use_container_width=True):
-                    st.session_state.filter_content_type = st.session_state.temp_content_type
-                    st.session_state.filter_genre = st.session_state.temp_genre
-                    st.session_state.filter_year = st.session_state.temp_year
-                    st.session_state.filter_language = st.session_state.temp_language
-                    st.session_state.filter_rating = st.session_state.temp_rating
-                    st.session_state.show_filter_ui = False
-                    st.rerun()
+            # Sort By filter
+            st.markdown('<p class="filter-title">Sort By</p>', unsafe_allow_html=True)
+            sort_options = {
+                "popularity.desc": "Most Popular",
+                "vote_average.desc": "Highest Rated",
+                "primary_release_date.desc": "Latest Release",
+                "revenue.desc": "Highest Revenue"
+            }
+            sort_by = st.selectbox(
+                label="",
+                options=list(sort_options.items()),
+                format_func=lambda x: x[1],
+                key="temp_sort",
+                label_visibility="collapsed"
+            )
+
+        # Add Apply and Reset buttons
+        button_col1, button_col2 = st.columns(2)
+        with button_col1:
+            if st.button("Reset Filters", use_container_width=True):
+                # Reset all temp filters to default values
+                st.session_state.temp_content_type = "Movies"
+                st.session_state.temp_genre = ("", "All Genres")
+                st.session_state.temp_year = (2000, 2024)
+                st.session_state.temp_rating = 0.0
+                st.session_state.temp_language = ("", "All Languages")
+                st.session_state.temp_sort = ("popularity.desc", "Most Popular")
+                st.rerun()
+        with button_col2:
+            if st.button("Apply Filters", use_container_width=True, type="primary"):
+                # Apply temp filters to actual filters
+                st.session_state.filter_content_type = st.session_state.temp_content_type
+                st.session_state.filter_genre = st.session_state.temp_genre
+                st.session_state.filter_year = st.session_state.temp_year
+                st.session_state.filter_rating = st.session_state.temp_rating
+                st.session_state.filter_language = st.session_state.temp_language
+                st.session_state.filter_sort = st.session_state.temp_sort
+                st.session_state.current_page = 1
+                st.rerun()
     
     # Convert content type for API calls
     content_type = 'movie' if st.session_state.filter_content_type == "Movies" else 'tv'
@@ -1086,7 +942,11 @@ def show_main_view():
     # Show loading spinner while fetching data
     with st.spinner("Loading content..."):
         if search_query:
-            items, total_pages = search_content(search_query, page=st.session_state.current_page, content_type=content_type)
+            items, total_pages = search_content(
+                search_query,
+                page=st.session_state.current_page,
+                content_type=content_type
+            )
         else:
             if content_type == 'movie':
                 items, total_pages = get_recommendations(
@@ -1099,64 +959,36 @@ def show_main_view():
                     page=st.session_state.current_page
                 )
     
-    if not items:
+    # Display content grid
+    if items:
+        display_content_grid(items, content_type)
+        
+        # Pagination
+        col1, col2, col3 = st.columns([2,3,2])
+        with col2:
+            cols = st.columns(3)
+            with cols[0]:
+                if st.button("← Previous", disabled=st.session_state.current_page <= 1):
+                    st.session_state.current_page -= 1
+                    st.rerun()
+            
+            with cols[1]:
+                st.markdown(f"<div style='text-align: center; padding: 5px;'>Page {st.session_state.current_page} of {total_pages}</div>", unsafe_allow_html=True)
+            
+            with cols[2]:
+                if st.button("Next →", disabled=st.session_state.current_page >= total_pages):
+                    st.session_state.current_page += 1
+                    st.rerun()
+    else:
         st.info("No content found. Try different search terms or filters!")
-        return
-    
-    # Display content in a grid
-    display_content_grid(items, content_type)
-    
-    # Pagination controls
-    st.markdown("""
-        <style>
-        .pagination {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            margin-top: 2rem;
-            gap: 1rem;
-        }
-        .page-button {
-            padding: 0.5rem 1rem;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            background: none;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .page-button:hover {
-            border-color: #666;
-            color: #333;
-        }
-        .page-info {
-            text-align: center;
-            min-width: 80px;
-            padding: 0.5rem;
-            font-size: 1rem;
-            color: var(--text-color);
-        }
-        </style>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([2,3,2])
-    with col2:
-        pagination_cols = st.columns([1,2,1])
-        with pagination_cols[0]:
-            if st.button("← Previous", disabled=st.session_state.current_page <= 1, use_container_width=True):
-                st.session_state.current_page -= 1
-                st.rerun()
-        
-        with pagination_cols[1]:
-            st.markdown(f'<div class="page-info">{st.session_state.current_page} / {total_pages}</div>', unsafe_allow_html=True)
-        
-        with pagination_cols[2]:
-            if st.button("Next →", disabled=st.session_state.current_page >= total_pages, use_container_width=True):
-                st.session_state.current_page += 1
-                st.rerun()
 
 def main():
+    """Main application entry point"""
     if st.session_state.view == 'details':
         show_movie_details(st.session_state.selected_movie)
+        if st.button("← Back to Browse"):
+            st.session_state.view = 'search'
+            st.rerun()
     else:
         show_main_view()
 
